@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width" />
+		<link rel="stylesheet" href="styl.css" type="text/css" charset="utf-8">
+		<title>BPHC Direct Connect</title>
+	</head>
+	<body>
+
+		<header>
+			<h2>BITS Hyderabad</h2>
+			<h1><span class="first-letter">D</span>IRECT <span class="first-letter">C</span>ONNECT</h1>
+		</header>
+
+		<hr>
+
+		<main>
+			<section>
+				<h3><a href="status">/status</a></h3>
+				<table id="status-table">
+					<thead id="status-table-header">
+						<th>Name</th>
+						<th>Address</th>
+						<th>Users</th>
+						<th>Shared Size</th>
+						<th>Status</th>
+					</thead>
+					<tbody id="status-table-body">
+					</tbody>
+				</table>
+			</section>
+			<section>
+				<h3><a href="search/?p=">/search/?p=</a></h3>
+				<form action="javascript:updateSearch(searchbox.value)">
+					<input type="text" value="" name="" placeholder="Search for files" id="searchbox"/>
+					<input type="submit" value="Search" name="" id="search-submit"/>
+				</form>
+				<span id="search-details"></span>
+				<table id="search-table">
+					<thead id="search-table-header">
+						<th>No.</th>
+						<th>Hub</th>
+						<th>User</th>
+						<th>Path</th>
+					</thead>
+					<tbody id="search-table-body">
+						<tr>
+							<td>&nbsp;</td>
+							<td>&nbsp;</td>
+							<td>&nbsp;</td>
+							<td>&nbsp;</td>
+						</tr>
+					</body>
+				</table>
+			<section>
+			<section>
+				<h3>/about</h3>
+				<p>A directory/status page for Direct Connect hubs, written in C! Check it out over <span style="color:#512"><a href="https://www.github.com/nmarirs/dbotc">here</a><span>.</p>
+			</section>
+		</main>
+		<script charset="utf-8" src="script.js"></script>
+	</body>
+</html>

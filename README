@@ -1,0 +1,7 @@
+# Direct Connect Bot/Status Page
+
+A Direct Connect bot client and status page that reports the status of DC hubs and provides improved search over the one provided by the DC protocol.
+
+Why is this written in C? Well.. it started out as something small and then grew bigger and bigger till there was no turning back.
+
+Depends on yxml, pthreads and libbzip2.
