@@ -29,7 +29,7 @@
 // #define DEBUG
 
 static const char NICKNAME[] = "dbotc";
-static const char DESCRIPTION[] = "Bot client in development! Do not connect";
+static const char DESCRIPTION[] = "There is nothing at http://172.16.122.112";
 static const char VERSION[] = "0.02";
 static const char MYIP[] = "172.16.122.112";
 static const char ACTIVEPORT[] = "34195";
@@ -214,6 +214,7 @@ typedef struct Hub {
 	int ts_connect;		// timestamp when last attempted connect
 
 	long shared_size;
+	time_t last_ping;
 } Hub;
 
 
@@ -240,6 +241,7 @@ Hub *create_hub(char *addr)
 	hub->state = COLD;
 	hub->name[0] = '\0';
 	hub->usercount = 0;
+	hub->last_ping = time(NULL);
 
 	return hub;
 }
@@ -715,6 +717,9 @@ bool client_action(Connection *con, char *cmd)
 
 void resethub(Connection *con) {
 	Hub *hub = con->node;
+	if (hub->state == CONNECTED) {
+		close(con->pfd->fd);
+	}
 	con->pfd->fd = -1;
 	con->recvsize = 0;
 	con->sendsize = 0;
@@ -726,6 +731,7 @@ bool parsehub(Connection *con)
 {
 	Hub *hub = con->node;
 	if (!conrecv(con)) {
+		close(con->pfd->fd);
 		resethub(con);
 		printf("!! [%s] Hub has disconnected\n", hub->address);
 		return true;
@@ -1141,7 +1147,7 @@ void serve_static(Connection *con, char *filename)
 	// prepare_response(con, 200, m, strlen(m), "text/html");
 	char path[128] = {0};
 	snprintf(path, 128, "pages/%s", filename);
-	FILE *fp = fopen(path, "r");
+	// FILE *fp = fopen(path, "r");
 }
 
 // perhaps this function will be the reason why you start using libraries
@@ -1265,9 +1271,49 @@ bool add_cfg_hubs()
 			printf("! Could not add Hub %s\n", buf);
 		}
 	}
-
 	fclose(fp);
 	return true;
+}
+
+bool hub_ping_check(Connection *con)
+{
+	char m[BUFSIZE];
+	time_t now = time(NULL);
+
+	Hub *hub = con->node;
+
+	if (hub->state != CONNECTED) {
+		// printf("* Not connected, not pinging %s\n", hub->name);
+		return false;
+	}
+
+	else if (now - hub->last_ping > 30) {
+		// snprintf(m, BUFSIZE, "$Ping %s:%s|", "localhost", ACTIVEPORT);
+		snprintf(m, BUFSIZE, "$MyINFO $ALL %s %s$A$0.005A$$0$|", NICKNAME, DESCRIPTION);
+		hub->last_ping = now;
+		printf("* Pinging %s\n", hub->name);
+		// TODO: retval and errors here
+		return consend_prepare(con, m, strlen(m));
+	}
+	// printf("* Wait %ld, before pinging\n", now - hub->last_ping);
+	return true;
+
+	/*
+	int error = 0;
+	socklen_t len = sizeof (error);
+	int retval = getsockopt (con->pfd->fd, SOL_SOCKET, SO_ERROR, &error, &len);
+	if (retval != 0) {
+		fprintf(stderr, "error getting socket error code: %s\n", strerror(retval));
+		return false;
+	}
+
+	if (error != 0) {
+		fprintf(stderr, "socket error: %s\n", strerror(error));
+		return false;
+	}
+	return true;
+	*/
+	
 }
 
 int main()
@@ -1320,6 +1366,9 @@ int main()
 			if (cons[i].type == HUB && ( ((Hub *)cons[i].node)->state == COLD || ((Hub *)cons[i].node)->state == H1)) {
 				hub_connect(&cons[i]);
 			}
+			if (cons[i].type == HUB) {
+				hub_ping_check(&cons[i]);
+			}
 		}
 	} while ((pcount = poll(pfds, n_cons, POLL_TIMEOUT) >= 0));
 
@@ -1336,4 +1385,5 @@ int main()
 	- Add history to web interface
 - Misc chat functions
 - Different people with same name on multiple hubs
+- Ping mechanism
  */
