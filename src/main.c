@@ -34,6 +34,8 @@ static const char VERSION[] = "0.02";
 static const char MYIP[] = "172.16.122.112";
 static const char ACTIVEPORT[] = "34195";
 static const char WEBPORT[] = "34196";
+static const char LOGFILE[] = "logs.log";
+// static const char LOGLEVELSTR[][] = {"INFO", "WARN", "CRIT", "DEBUG"};
 
 enum NodeType {HUB, CLIENT, ACTIVE, WEB, WEBCLIENT, CMD};
 
@@ -47,6 +49,20 @@ void handler(int sig) {
 	fprintf(stderr, "Error: signal %d:\n", sig);
 	backtrace_symbols_fd(array, size, STDERR_FILENO);
 	exit(1);
+}
+
+
+
+/*		LOGGING		*/
+void write_debug(char *message)
+{
+	FILE *fp = fopen(LOGFILE, "a");
+	if (!fp) {
+		perror("fopen (write_log)");
+	}
+	fprintf(fp, "[DEBUG](dbotc): %s\n", message);
+
+	fclose(fp);
 }
 
 
@@ -236,8 +252,9 @@ Hub *create_hub(char *addr)
 	if (!hub)
 		return NULL;
 	hub->address[0] = '\0';
-	strncpy(hub->address, addr, 63);
-	hub->address[63] = 0;
+	// strncpy(hub->address, addr, 63);
+	snprintf(hub->address, 64, "%s", addr);
+	// hub->address[63] = 0;
 	hub->state = COLD;
 	hub->name[0] = '\0';
 	hub->usercount = 0;
@@ -246,12 +263,37 @@ Hub *create_hub(char *addr)
 	return hub;
 }
 
+uint32_t MurmurOAAT_32(const char* str, uint32_t h)
+{
+    // One-byte-at-a-time hash based on Murmur's mix
+    // Source: https://github.com/aappleby/smhasher/blob/master/src/Hashes.cpp
+    for (; *str; ++str) {
+        h ^= *str;
+        h *= 0x5bd1e995;
+        h ^= h >> 15;
+    }
+    return h;
+}
+
+void get_filelist_name(char *nick, char *salt, char *name_buf, size_t bufsize)
+{
+	char pt[256];
+	snprintf(pt, 256, "%s%s", nick, salt);
+	uint32_t h = 0xdb07c;
+	h = MurmurOAAT_32(pt, h);
+	snprintf(name_buf, bufsize, "filelists/%x.xml.bz2", h);
+}
+
 // Open filelist corresponding to nick
 // TODO This does not account for if different users have the same nickname on different hubs
+// TODO Replace with a hash function
 FILE *fopen_user_filelist(char *nick, char *mode)
 {
 	char filename[128];
 
+	get_filelist_name(nick, "hubname no work :(", filename, 128);
+
+	/*
 	// Prevent path traversal vulnerabilities
 	int nicksize = strlen(nick);
 	for (int i = 0; i < nicksize; i++) {
@@ -261,6 +303,7 @@ FILE *fopen_user_filelist(char *nick, char *mode)
 	}
 
 	snprintf(filename, 128, "filelists/%s.xml.bz2", nick);
+	*/
 	FILE *fp = fopen(filename, mode);
 	return fp;
 }
@@ -270,7 +313,9 @@ FILE *fopen_user_filelist(char *nick, char *mode)
 bool remove_user_filelist(char *nick)
 {
 	char filename[128];
+	get_filelist_name(nick, "hubname no work :(", filename, 128);
 
+	/*
 	// Prevent path traversal vulnerabilities
 	// Better idea would maybe be to hash the nick into a string with friendlier characters?
 	int nicksize = strlen(nick);
@@ -281,32 +326,59 @@ bool remove_user_filelist(char *nick)
 	}
 
 	snprintf(filename, 128, "filelists/%s.xml.bz2", nick);
+	*/
 	if (remove(filename) != 0) {
+		char log_msg[2048];
+		snprintf(log_msg, 2048, "Tried to remove file %s but it was not found.\n", filename);
+		write_debug(log_msg);
 		perror("remove");
 		return false;
 	}
 	return true;
 }
 
+// returns false if the user could not be added (max user count hit)
 bool add_hub_user(Connection *con, char *name, long size) {
 	Hub *hub = con->node;
+	bool added = false;
+	// First branch checks for any unused space and immediately adds the nick
+	// Second branch resolves if nick already exists
 	for (int i = 0; i < MAX_HUB_USERS; i++) {
-		if (hub->users[i].active == false) {
+		if (!added && hub->users[i].active == false) {
 			snprintf(hub->users[i].nick, 64, "%s", name);
 			hub->users[i].size = size;
 			hub->users[i].active = true;
-			return true;
+			added = true;
+		} else if (strncmp(hub->users[i].nick, name, 64) == 0) {
+			// if the previous branch already added the nick, remove all later references
+			if (added) {
+				hub->users[i].active = false;
+			} else {
+				added = true;
+			}
 		}
 	}
-	return false;
+	return added;
 }
 
+// returns false if you're trying to remove a user who isn't on the hub
+// BUG: DOESNT CONSIDER IF USER HAS LEFT ONLY ONE HUB OUT OF MULTIPLE (commented out part)
 bool remove_hub_user(Connection *con, char *name) {
 	Hub *hub = con->node;
 	for (int i = 0; i < MAX_HUB_USERS; i++) {
 		if (strncmp(hub->users[i].nick, name, 64) == 0) {
-			remove_user_filelist(hub->users[i].nick);
 			hub->users[i].active = false;
+
+			char msg[2048];
+			/*
+			if (remove_user_filelist(hub->users[i].nick, hub->name)) {
+				snprintf(msg, 2048, "Removed %s's filelist", name );
+			} else {
+				snprintf(msg, 2048, "Could not remove %s's filelist", name);
+			}
+			write_debug(msg);
+			*/
+
 			return true;
 		}
 	}
@@ -316,9 +388,15 @@ bool remove_hub_user(Connection *con, char *name) {
 int get_hub_usercount(Connection *con) {
 	int usercount = 0;
 	Hub *hub = con->node;
+
+	if (hub->state == COLD || con->active == false) {
+		return 0;
+	}
+
 	for (int i = 0; i < MAX_HUB_USERS; i++) {
 		if (hub->users[i].active) {
 			usercount++;
+			printf("User: %s Active?: %s\n", hub->users[i].nick, hub->users[i].active ? "True" : "False");
 		}
 	}
 	return usercount;
@@ -715,23 +793,50 @@ bool client_action(Connection *con, char *cmd)
 	return true;
 }
 
+void reset_connection(Connection *con)
+{
+	if (con->active) {
+		con->active = false;
+		close(con->pfd->fd);
+	}
+	con->pfd = NULL;
+	con->active = false;
+	con->node = NULL;
+	con->recvsize = 0;
+	con->sendsize = 0;
+	con->recvbuf[0] = 0;
+	con->sendbuf[0] = 0;
+}
+
+// set hub back to cold and dark
 void resethub(Connection *con) {
 	Hub *hub = con->node;
 	if (hub->state == CONNECTED) {
 		close(con->pfd->fd);
 	}
 	con->pfd->fd = -1;
+	con->active = false;
+	con->type = HUB;
 	con->recvsize = 0;
 	con->sendsize = 0;
+	con->recvbuf[0] = 0;
+	con->sendbuf[0] = 0;
+
 	hub->usercount = 0;
 	hub->state = COLD;
+	// hub->users = ????
+	hub->shared_size = 0;
+
+	for (int i = 0; i < MAX_HUB_USERS; i++) {
+		hub->users[i].active = false;
+	}
 }
 
 bool parsehub(Connection *con)
 {
 	Hub *hub = con->node;
 	if (!conrecv(con)) {
-		close(con->pfd->fd);
+		// close(con->pfd->fd);
 		resethub(con);
 		printf("!! [%s] Hub has disconnected\n", hub->address);
 		return true;
@@ -925,9 +1030,12 @@ bool prepare_status(Connection *con)
 
 	strncat(m, "{\"data\":[", 1024 - strlen(m));
 	int hubcount = 0;
-	for (int i = 0; i < n_cons; i++) {
+	for (int i = 0; i < MAX_CONS; i++) {
 		if (cons[i].type == HUB) {
 			Hub *hub = cons[i].node;
+			if (hub == NULL) {
+				continue;
+			}
 			char objbuf[1024] = {'\0'};
 			snprintf(objbuf, sizeof objbuf,
 					"%s{\"hub\":\"%s\", \"addr\":\"%s\", \"users\":%d, \"shared_size\":%ld, \"active\":%s}",
@@ -939,9 +1047,11 @@ bool prepare_status(Connection *con)
 					hub->state == CONNECTED ? "true" : "false");
 			strncat(m, objbuf, sizeof(m) - strlen(m) - 1);
 			hubcount++;
+			printf("[DEBUG] %s %d\n", hub->address, hubcount);
 		}
 	}
 	strncat(m, "]}", 1024 - strlen(m));
+	printf("[DEBUG] %s\n", m);
 	prepare_response(con, 200, m, strlen(m), "application/json");
 	return true;
 }
@@ -1002,11 +1112,11 @@ typedef struct searchargs {
 } searchargs;
 
 // search specific file for search term
-int fsearch(Connection *con, char *filename, char *search, char *hubname)
+int fsearch(Connection *con, char *client_nick, char *search, char *hubname)
 {
 	const int MAXRESULTS = 50;
 	int resultcount = 0;
-	FILE *fp = fopen_user_filelist(filename, "rb");
+	FILE *fp = fopen_user_filelist(client_nick, "rb");
 	if (!fp) {
 		return 1;
 	}
@@ -1072,7 +1182,7 @@ int fsearch(Connection *con, char *filename, char *search, char *hubname)
 						break;
 					}
 					if (strcasestr(data, search)) {
-						snprintf(chunkdata, 2000, "{\"Hub\":\"%s\",\"user\":\"%s\",\"path\":\"%s/%s\"},", hubname, filename, path, data);
+						snprintf(chunkdata, 2000, "{\"Hub\":\"%s\",\"user\":\"%s\",\"path\":\"%s/%s\"},", hubname, client_nick, path, data);
 						size_t chunkdatasize = strlen(chunkdata);
 						while (!prepare_chunked_body(con, chunkdatasize, chunkdata)) {
 							// fprintf(stderr, "!! Could not prepare chunk! sendbuf is probably full\n");
@@ -1110,7 +1220,7 @@ int fsearch(Connection *con, char *filename, char *search, char *hubname)
 void filelist_search(Connection *con, char *search)
 {
 	printf("* Filelist search for <%s> starting...\n", search);
-	for (int i = 0; i < n_cons; i++) {
+	for (int i = 0; i < MAX_CONS; i++) {
 		if (cons[i].active && cons[i].type == HUB) {
 			Hub *hub = cons[i].node;
 			for (int j = 0; j < MAX_HUB_USERS; j++) {
@@ -1254,6 +1364,8 @@ bool parse(Connection *con)
 	return false;
 }
 
+// Read hub config from hubs.cfg
+// FATAL if hubs.cfg is not found
 bool add_cfg_hubs()
 {
 	FILE *fp = fopen("hubs.cfg", "r");
@@ -1275,60 +1387,53 @@ bool add_cfg_hubs()
 	return true;
 }
 
+// We don't really get to know if a hub has died unless you poke and ask every once in a while
 bool hub_ping_check(Connection *con)
 {
 	char m[BUFSIZE];
 	time_t now = time(NULL);
+	const int DEATH_PRECISION = 30;
 
 	Hub *hub = con->node;
 
 	if (hub->state != CONNECTED) {
-		// printf("* Not connected, not pinging %s\n", hub->name);
 		return false;
 	}
 
-	else if (now - hub->last_ping > 30) {
+	else if (now - hub->last_ping > DEATH_PRECISION) {
 		// snprintf(m, BUFSIZE, "$Ping %s:%s|", "localhost", ACTIVEPORT);
 		snprintf(m, BUFSIZE, "$MyINFO $ALL %s %s$A$0.005A$$0$|", NICKNAME, DESCRIPTION);
 		hub->last_ping = now;
 		printf("* Pinging %s\n", hub->name);
-		// TODO: retval and errors here
 		return consend_prepare(con, m, strlen(m));
 	}
 	// printf("* Wait %ld, before pinging\n", now - hub->last_ping);
 	return true;
-
-	/*
-	int error = 0;
-	socklen_t len = sizeof (error);
-	int retval = getsockopt (con->pfd->fd, SOL_SOCKET, SO_ERROR, &error, &len);
-	if (retval != 0) {
-		fprintf(stderr, "error getting socket error code: %s\n", strerror(retval));
-		return false;
-	}
-
-	if (error != 0) {
-		fprintf(stderr, "socket error: %s\n", strerror(error));
-		return false;
-	}
-	return true;
-	*/
-	
 }
 
 int main()
 {
+	// Turn off buffering
+	setbuf(stdout, NULL);
 	// Print a backtrace before segfaulting
 	signal(SIGSEGV, handler);
 
 	n_cons = 0;
+
 	pfds = malloc(sizeof(struct pollfd) * MAX_CONS);
 	if (!pfds) {
 		perror("malloc");
 		return 1;
 	}
 
-	add_cfg_hubs();
+	for (int i = 0; i < MAX_CONS; i++) {
+		reset_connection(&cons[i]);
+	}
+
+	if (!add_cfg_hubs()) {
+		fprintf(stderr, "!! Could not find hubs.cfg\n");
+		return 1;
+	}
 
 	if (!setup_active()) {
 		fprintf(stderr, "!! Failed to setup active listener\n");
@@ -1385,5 +1490,4 @@ int main()
 	- Add history to web interface
 - Misc chat functions
 - Different people with same name on multiple hubs
-- Ping mechanism
  */

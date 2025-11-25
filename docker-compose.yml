@@ -1,0 +1,6 @@
+services:
+  dbotc:
+    build: .
+    ports:
+      - "34196:80"            # nginx
+      - "34195:34195"         # program
